@@ -7,23 +7,23 @@ These files are in Homegenie package format and can be added to your Homegenie s
 
 ## 1000-PcmWiFi_Energy_Monitor.hgx
 
-Reads energy use (watts and Kwh) from a PcmWiFi system
+Reads energy use (watts and Kwh) from a PcmWiFi system. I don't know if it's commercially available anymore. My system failed a few months ago. I replaced it with OpenEnergyMonitor hardware.
   
 ## 1004-PCMWIFI_Page_Scraper.hgx
 
-Uses page scraping to retrieve values.
+Uses page scraping to retrieve PCMWIFI values from the device web page.
   
 ## 1005-Python_HTML_Scraping.hgx
 
-Used python beautiful soup to scrape values from a web page. Not suitable for Rasberry Pi because of memory requirements.
+Used Python Beautiful Soup (https://www.crummy.com/software/BeautifulSoup/) to scrape values from a web page. Not suitable for Rasberry Pi because of memory requirements.
 
 ## 1006-WiFi_Thermostat.hgx
 
-Radio Thermostat
+Radio Thermostat interface
 
 ## 1007-WIFI_Thermostat_Python.hgx
 
-Radio Thermostat
+Radio Thermostat interface in Python
 
 ## 1008-RFXCOM_Sensors.hgx
 
