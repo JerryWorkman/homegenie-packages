@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>// Put your trigger code logic here.
+// To execute the Code To Run,
+// use a 'return true' or 'return false' otherwise.
+Program.Setup( () =&gt; {
+  // set the widget
+  Program.UseWidget("homegenie/generic/sensor");
+  Program.Parameter("Widget.DisplayIcon").Value = "images/youless.png";
+
+  // set input fields parameters
+  // Program.AddOption(&lt;field&gt;, &lt;defaultValue&gt;, &lt;description&gt;, &lt;type&gt;)
+  Program.AddOption("IPAddress", "192.168.XXX.XXX", "PcmWiFi IP address", "text");
+  Program.AddOption("Multiplier", "1.0", "WattHour to Watt Multiplier", "text");
+  Program.AddOption("MaxWattHour", "30000", "WattHour values obove this are ignored.", "text");
+  Program.AddOption("UpdateInterval", "30", "Update interval in seconds.", "text");
+  
+  // setup program parameters
+//  Program.Parameter("Meter.Total").Value = "";
+  Program.Parameter("Meter.Watts").Value = "";
+});
+
+return true;
+</ScriptCondition>
+  <ScriptSource>
+double _Multiplier = 1.0;
+double _MaxWattHours = 8000.0;
+int _UpdateInterval = 30;
+
+Func&lt;string, int, int&gt; Str2Int = (string svalue, int default_value) =&gt; 
+{
+    int ivalue;
+    if(int.TryParse(svalue, out ivalue)) {
+        return ivalue;      
+    } else {
+        Program.Notify("PcmWiFi Error","Error parsing value: " + svalue);
+        return default_value;
+    } 
+};
+
+Func&lt;string, double, double&gt; Str2Dbl = (string svalue, double default_value) =&gt; 
+{
+    double dvalue;
+    if(Double.TryParse(svalue, out dvalue)) {
+        return dvalue;      
+    } else {
+        Program.Notify("PcmWiFi Error","Error parsing value: " + svalue);
+        return default_value;
+    } 
+};
+
+string IPAddress = Program.InputField("IPAddress").Value; //TODO: validate
+double Multiplier = Str2Dbl(Program.InputField("Multiplier").Value, _Multiplier);
+double MaxWattHours = Str2Dbl(Program.InputField("MaxWattHour").Value, _MaxWattHours);
+int UpdateInterval = Str2Int(Program.InputField("UpdateInterval").Value, _UpdateInterval);
+
+string url = "http://" + IPAddress + "/";
+String webresult;
+//System.Windows.Forms.HtmlDocument doc = new System.Windows.Forms.HtmlDocument();
+//TOO BAD WE CAN'T USE REGEX
+//string KWpat = @"(\d\.\d+)\sKW\&lt;";
+//Regex r = new Regex(KWpat, RegexOptions.IgnoreCase);
+
+while (Program.IsEnabled)
+{
+  try
+  {
+	webresult = hg.Net.WebService(url).GetData();
+    //Program.Notify("result length", webresult.Length.ToString());
+  	String val = "";
+    if(webresult.Length &gt; 0) {
+      //Match m = r.Match(webresult);
+      int kw = webresult.IndexOf(" KW&lt;");
+      if(kw != -1) {
+        val = webresult.Substring(kw - 6, 7);
+        Program.Notify("KW value", val);
+      } else {
+        Program.Notify("PCMWIFI", "web page not responding.");        
+      }
+    }
+    //var htmlDoc = new HtmlAgilityPack.HtmlDocument();
+	//Program.Notify("data", webresult);
+    //Xpath: //*[@id="status"]/table[3]/tbody/tr[2]/td[2]
+    //HtmlNode greenBlockContainer = doc.DocumentNode.SelectSingleNode("//div[@class=\"green-block-container\"]");
+    //HtmlNode statusContainer = doc.DocumentNode.SelectSingleNode("*[@id=\"status\"]");
+    //HtmlNodeCollection statusBlocks = statusContainer.SelectNodes("//div[@class=\"green-block\"]");
+    //*[@id="status"]/table[3]/tbody/tr[2]/td[2]
+    //string load = greenBlocks[0].SelectNodes("*[@id=\"status\"]/table[3]/tbody/tr[2]/td[2]")[0].InnerText;
+    //Program.Notify("load", load); 
+  }
+  catch (Exception e) 
+  {
+    Program.Notify("PcmWiFi ERROR!", "Error retrieving PcmWiFi data!");
+    //Program.Parameter("PcmWiFi.Current").Value = "ERROR: " + e.Message;
+    Program.Notify("Error", e.Message );
+    Pause(5);
+  }
+  Pause(UpdateInterval); // pause before next check
+}
+Program.GoBackground();
+</ScriptSource>
+  <ScriptErrors>[]</ScriptErrors>
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1004</Address>
+  <Name>PCMWIFI Page Scraper</Name>
+  <Description>Scrapes PCMWIFI page for energy use</Description>
+  <Group>Energy Management</Group>
+  <Features />
+  <ActivationTime xsi:nil="true" />
+  <TriggerTime xsi:nil="true" />
+  <Type>CSharp</Type>
+  <IsEnabled>false</IsEnabled>
+</ProgramBlock>

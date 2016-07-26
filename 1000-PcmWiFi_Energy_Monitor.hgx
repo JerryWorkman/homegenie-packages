@@ -1,0 +1,153 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>Program.Setup( () =&gt; {
+  Program.UseWidget("homegenie/generic/sensor");
+  Program.Parameter("Widget.DisplayIcon").Value = "pages/control/widgets/homegenie/generic/images/power.png";
+
+  // set input fields parameters
+  // Program.AddOption(&lt;field&gt;, &lt;defaultValue&gt;, &lt;description&gt;, &lt;type&gt;)
+  Program.AddOption("IPAddress", "255.255.255.255", "PcmWiFi IP address mask", "text");
+  Program.AddOption("Port", "30278", "PcmWiFi Port number. Default is 30278", "text");
+  Program.AddOption("Multiplier", "1.0", "WattHour to Watt Multiplier", "text");
+  Program.AddOption("MaxWattHour", "30000", "WattHour values obove this are ignored.", "text");
+  Program.AddOption("UpdateInterval", "60", "Update interval in seconds.", "text");
+  
+  // setup program parameters
+  Program.Parameter("Meter.Total").Value = "";
+  Program.Parameter("Meter.Watts").Value = "";
+});
+
+return true;</ScriptCondition>
+  <ScriptSource>const string _IpAddress = "255.255.255.255"; // Actually a netmask only change if you have more than one PCMWIFI device
+const int _Port = 30278; 
+const double _Multiplier = 0.7184; //WattHr2Watt
+const int _UpdateInterval = 60; // seconds - The Energy Monitor samples every 60 seconds
+const double _MaxWattHours = 30000.0; // In case of a bad read
+const int debounceDelay = 10000; // debounce delay in milliseconds between read attempts PCMWIFI blasts multiple responses
+
+Func&lt;string, int, int&gt; Str2Int = (string svalue, int default_value) =&gt; 
+{
+    int ivalue;
+    if(int.TryParse(svalue, out ivalue)) {
+        return ivalue;      
+    } else {
+        Program.Notify("PcmWiFi Error","Error parsing value: " + svalue);
+        return default_value;
+    } 
+};
+
+Func&lt;string, double, double&gt; Str2Dbl = (string svalue, double default_value) =&gt; 
+{
+    double dvalue;
+    if(Double.TryParse(svalue, out dvalue)) {
+        return dvalue;      
+    } else {
+        Program.Notify("PcmWiFi Error","Error parsing value: " + svalue);
+        return default_value;
+    } 
+};
+
+// Also accepts "255.255.255.255" since in this case it's really a subnet mask
+Func&lt;string, bool&gt; ValidIpAddress = (string ip) =&gt; 
+{
+  string[] bytes = ip.Trim().Split('.');
+  foreach (string b in bytes) {
+    int v;
+    if (Int32.TryParse(b.Trim(), out v)) {
+	  if( v &lt; 0 || v &gt; 255 ) return false;
+	}
+  }
+  return true;
+};
+
+System.Timers.Timer timer = new System.Timers.Timer(debounceDelay); 
+timer.Enabled = false;
+timer.AutoReset = false;
+
+string IPAddress = Program.Option("IPAddress").Value;
+if( ! ValidIpAddress(IPAddress)) {
+	Program.Notify("PcmWiFi Error", "Invalid IP address");
+	//return false;
+}
+int Port = Str2Int(Program.Option("Port").Value, _Port);
+double Multiplier = Str2Dbl(Program.Option("Multiplier").Value, _Multiplier);
+double MaxWattHours = Str2Dbl(Program.Option("MaxWattHour").Value, _MaxWattHours);
+int UpdateInterval = Str2Int(Program.Option("UpdateInterval").Value, _UpdateInterval);
+
+Action&lt;string&gt; ProcessData = (string data) =&gt;
+{
+  if( timer.Enabled ) return;
+  timer.Enabled = true;
+  //split out watts
+  //Typical Data response:
+  //msgtype=PCMWiFi; DeviceID=001EC0010EF6; Inst=54; Reg=2042078; Temp=27; BattLow=0; SQI=66; uTime=1424804126;
+  Dictionary&lt;string, string&gt; d = new Dictionary&lt;string, string&gt;();
+  try {
+    data = data.Replace(" ", "");
+    //Program.Notify("PcmWiFi", data);
+    if (! data.Contains(";")) {
+      Program.Notify("PcmWiFi Invalid data: ", data);
+      throw new System.ArgumentException("PcmWiFi Invalid data: ", data);
+    }
+    string[] pairs = data.Split(';');
+    foreach (string pair in pairs) {
+      string[] p = pair.Split('=');
+      if(p[0] != "") {
+        d.Add(p[0], p[1]);
+      }
+    }
+    double wattHours = Str2Dbl(d["Inst"], 0);
+    if(wattHours &gt; 0 &amp;&amp; wattHours &lt;= MaxWattHours) {
+      int watts = (int) (Double.Parse(d["Inst"]) * Multiplier);
+      string wstr = System.Convert.ToString(watts);
+      string currentWatts = wstr;
+      Program.Parameter("Meter.Watts").Value = currentWatts.ToString();
+      
+      string totalWattHours = d["Reg"];
+      Program.Parameter("Meter.Total").Value = totalWattHours.ToString();
+      Program.Notify("PcmWiFi", currentWatts.ToString() + " Watts");
+    }
+  } catch(Exception e) {
+     Program.Notify("PcmWiFi", "Error reading data: " + d["Inst"] + "\n" + d["Reg"]);
+     Pause(2);
+     Program.Notify("Error", e.Message );
+  }
+};
+
+while (Program.IsEnabled)
+{
+  try
+  {
+    if( UdpClient.Receiver(Port) ) {
+          UdpClient.OnStringReceived ( ProcessData );          
+    } else {
+        Program.Notify("PcmWiFi Error", "Can't connect to port " + Port );
+    }
+  }
+  catch (Exception e) 
+  {
+    Program.Notify("PcmWiFi ERROR!", "Error retrieving PcmWiFi data!");
+    //Program.Parameter("PcmWiFi.Current").Value = "ERROR: " + e.Message;
+    Program.Notify("Error", e.ToString() );
+    Pause(5);
+  }
+  Pause(UpdateInterval); // pause before next check
+}
+Program.GoBackground();
+
+</ScriptSource>
+  <ScriptErrors />
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1000</Address>
+  <Name>PcmWiFi Energy Monitor</Name>
+  <Description>Retrieves energy usage from the PcmWiFi energy monitor from BlueLine Innovations</Description>
+  <Group>Energy Management</Group>
+  <Features />
+  <ActivationTime>2016-03-20T21:53:53.389158Z</ActivationTime>
+  <TriggerTime>2016-03-20T21:53:53.458384Z</TriggerTime>
+  <Type>CSharp</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>

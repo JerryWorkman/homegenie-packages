@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>#setup program stuff
+def setup():
+  hg.Program.Notify("Python Test", "Hello Python")
+  return True
+
+hg.Program.Setup(setup)
+
+</ScriptCondition>
+  <ScriptSource>"""
+Python Automation Script
+Example for using Helper Classes:
+hg.Modules.WithName('Light 1').On()
+"""
+import sys
+sys.path.append("/usr/lib/python2.7/")
+import urllib2
+sys.path.append("/usr/local/lib/python2.7/dist-packages/")
+from BeautifulSoup import BeautifulSoup
+
+while True: #hg.Program.IsEnabled:
+  try:
+    html = urllib2.urlopen('http://192.168.10.119/indexunlinked.htm').read()
+  except:
+    hg.Pause(10)
+    continue
+    
+  #soup = BeautifulSoup(html)
+  #data =  soup('table')[2].tbody('td',{'class':'valid'})[1].get_text()
+  #dataPower =  soup('table')[2].tbody('td')[10].get_text()
+  #lastScan =  soup('table')[2].tbody('td')[16].get_text()
+
+  hg.Program.Notify("HelloPY","test")
+  hg.Pause(10)
+
+hg.Program.GoBackground()
+</ScriptSource>
+  <ScriptErrors />
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1005</Address>
+  <Name>Python HTML Scraping</Name>
+  <Description />
+  <Group>Energy Management</Group>
+  <Features />
+  <ActivationTime>2015-11-30T04:35:28.798917Z</ActivationTime>
+  <TriggerTime xsi:nil="true" />
+  <Type>Python</Type>
+  <IsEnabled>false</IsEnabled>
+</ProgramBlock>

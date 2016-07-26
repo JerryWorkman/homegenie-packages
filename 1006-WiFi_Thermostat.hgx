@@ -1,0 +1,231 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>Program.AddOption("IPaddress", "192.168.1.100", "WiFi Thermostat IP Address", "text");
+Program.AddOption("URI", "/tstat", "URI to get status data", "text");
+Program.AddOption("ThermostatsCount", "1", "Virtual thermostats modules to create", "text");
+//Program.AddFeature("HomeAutomation.WiFiThermostat", "Thermostat", "VirtualThermostat.TemperatureModule", "Module to read temperature from", "module.text:any:any:sensor.temperature");
+//Program.AddFeature("HomeAutomation.WiFiThermostat", "Thermostat", "VirtualThermostat.SwitchModule", "Module to switch on/off on set point", "module.text:any:switch,light,dimmer,thermostat,shutter:any");
+Program.Run();</ScriptCondition>
+  <ScriptSource>const int HOLDING_MODE_DIFF = 1;
+const string MODULES_DOMAIN = "HomeAutomation.BasicThermostat";
+const string PARAMETER_TEMPERATURE_MODULE = "VirtualThermostat.TemperatureModule";
+const string PARAMETER_SWITCH_MODULE = "VirtualThermostat.SwitchModule";
+const string EVENT_DESCRIPTION = "WiFi Thermostat";
+
+var IPaddress = Program.Option("IPaddress").Value;
+
+Func&lt;string, string&gt; F2C = (f) =&gt;
+{
+  try {
+    var fd = Double.Parse(f);
+    var cd = (fd - 32.0) * 5.0 / 9.0;
+    return cd.ToString();    
+  }
+  catch (Exception e) 
+  {
+    return null;
+  }
+};
+
+Func&lt;Newtonsoft.Json.Linq.JObject&gt; GetTstatData = () =&gt; 
+{
+  if(Net.Ping(IPaddress)) {
+    var URI = Program.Option("URI").Value;
+    var URL = "http://" + IPaddress + URI;
+    var json_data = Net.WebService(URL).GetData(); 
+    //var t = json_data.GetType();
+    //Program.Notify("Type", t.ToString());
+    if( json_data is Newtonsoft.Json.Linq.JObject )
+    {
+    	return json_data;      
+    } else return null;
+  } else {
+    Program.Notify("WiFi Thermostat", "ERROR: Unable to ping IP address");
+    return null;
+  }
+};
+
+var thermostatsCount = 1;
+Program.AddVirtualModules(MODULES_DOMAIN, "Thermostat", "homegenie/generic/thermostat", 1, thermostatsCount);
+var thermostatModules = Modules.InDomain(MODULES_DOMAIN).OfDeviceType("Thermostat");
+
+var holdingMode = new bool[thermostatsCount];
+
+var ThermostatLogicRun = new Func&lt;ModuleHelper, bool&gt;((thermostat)=&gt;{
+
+  var temperature = thermostat.Parameter("Sensor.Temperature");
+  var operatingState = thermostat.Parameter("Thermostat.OperatingState");
+  var thermostatMode = thermostat.Parameter("Thermostat.Mode");
+  var heatSetPoint = thermostat.Parameter("Thermostat.SetPoint.Heating");
+  var index = int.Parse(thermostat.Instance.Address) - 1;
+  string domainAddress = "";
+  string domain = "";
+  string address = "";
+
+  try
+  {
+	// Get Thermostat setpoint
+    // Update Thermostat module Temperature field
+    Newtonsoft.Json.Linq.JObject tstat = GetTstatData();
+    /*
+    tstat contains:
+    temp: 71.5
+    tmode: 3
+    fmode: 1
+    override: 0
+    hold: 1
+    t_heat: 72
+    t_cool: 77
+    ttarget: 1
+    program_mode: 1
+    tstate: 1
+    fstate: 1
+    time: day: 6 hour: 17 minute: 35
+    t_type_post: 0
+    */
+    if(tstat == null) { return false; }
+    var actualTempF = tstat["temp"].ToString();
+    var actualTemp = F2C(actualTempF); //temperatureModule.Parameter("Sensor.Temperature").Value;
+    //set thermostat temp TODO: verify that temp is within a reasonable range
+    if( actualTemp != null) 
+    	Program.RaiseEvent(thermostat, "Sensor.Temperature", actualTemp, EVENT_DESCRIPTION);
+    var actualHeatSetPoint = tstat["t_heat"].ToString();
+    var actualMode = tstat["tmode"].ToString(); //1-3
+    //Program.Notify("actualTemp", actualTempF); 
+    //Pause(5);
+    //Program.Notify("actualHeatSetPoint", actualHeatSetPoint; 
+    //Pause(5);
+    //Program.Notify("actualMode", actualMode; 
+    // Set the thermostat widget mode, temp and setpoint
+  
+    //TODO: update "real" thermostat setpoints from widget
+    
+    // Heat Mode logic
+    if (thermostatMode.Value == "Heat")
+    {
+      if (temperature.DecimalValue &lt; heatSetPoint.DecimalValue - (holdingMode[index] ? HOLDING_MODE_DIFF : 0))
+      {
+        //if (switchModule.IsOff) holdingMode[index] = false;
+        if (operatingState.Value != "Heating")
+        {
+          Program.RaiseEvent(thermostat, "Thermostat.OperatingState", "Heating", EVENT_DESCRIPTION);
+        }
+        // Heating
+        //switchModule.On();
+      }
+      else
+      {
+        //if (switchModule.IsOn) holdingMode[index] = true;
+        if (operatingState.Value != "PendingHeat")
+        {
+          Program.RaiseEvent(thermostat, "Thermostat.OperatingState", "PendingHeat", EVENT_DESCRIPTION);
+        }
+        // Waiting
+        //switchModule.Off();
+      }
+    }
+    else
+    {
+      if (operatingState.Value != "Off" &amp;&amp; operatingState.Value != "Idle")
+      {
+        Program.RaiseEvent(thermostat, "Thermostat.OperatingState", "Idle", EVENT_DESCRIPTION);
+        holdingMode[index] = false;
+      }
+      // Off
+      //switchModule.Off();
+    }  
+  } 
+  catch (Exception e) 
+  {
+    Program.Notify("Basic Thermostat " + thermostat.Instance.Address, "ERROR: " + e.Message);
+  }
+
+  return true;
+});
+
+//Looks for changes in sensor temperature
+When.ModuleParameterChanged((module, parameter)=&gt;{
+  if (parameter.Is("Sensor.Temperature"))
+  {
+    thermostatModules.Each((thermostat)=&gt;{
+      var domainAddress = thermostat.Parameter(PARAMETER_TEMPERATURE_MODULE).Value;
+      if (domainAddress != "" &amp;&amp; domainAddress.IndexOf(":") &gt; 0)
+      {
+        var separatorIndex = domainAddress.LastIndexOf(':');
+        if (separatorIndex &gt; 0) 
+        {
+          var domain = domainAddress.Substring(0, separatorIndex).ToLower();
+          var address = domainAddress.Substring(separatorIndex + 1).ToLower();
+          if (module.Instance.Domain.ToLower() == domain &amp;&amp; module.Instance.Address.ToLower() == address)
+          {
+            Program.RaiseEvent(thermostat, "Sensor.Temperature", parameter.Value, EVENT_DESCRIPTION);
+            ThermostatLogicRun(thermostat);
+          }
+        }
+      }
+      return false;
+    });
+  }
+  return true;
+});
+
+// implement Web API calls as defined in the Thermostat widget
+When.WebServiceCallReceived(MODULES_DOMAIN, (args)=&gt;{
+  var res = "ERROR";
+  var cmdArgs = args.ToString().Split('/');
+  var address = cmdArgs[1];
+  var command = cmdArgs[2];
+  var option = cmdArgs[3];
+  var thermostat = Modules.InDomain(MODULES_DOMAIN).WithAddress(address).Get();
+  var index = int.Parse(thermostat.Instance.Address) - 1;
+  switch (command)
+  {
+    case "Thermostat.SetPointSet":
+    // Basic thermostat currently only supports Heating mode
+    if (option == "Heating")
+    {
+      var setPoint = cmdArgs[4];
+      //Program.RaiseEvent(thermostat, "Thermostat.SetPoint.Heating", setPoint, EVENT_DESCRIPTION);
+      holdingMode[index] = false;
+      ThermostatLogicRun(thermostat);
+      res = "OK";
+    }
+    break;
+    case "Thermostat.ModeSet":
+    // Currently supported modes are Off or Heat
+    if (option == "Off" || option == "Heat")
+    {
+      //Program.RaiseEvent(thermostat, "Thermostat.Mode", option, EVENT_DESCRIPTION);
+      holdingMode[index] = false;
+      ThermostatLogicRun(thermostat);
+      res = "OK";
+    }
+    break;
+  }
+  return "[{ \"ResponseValue\" : " + res + "}]";
+});
+
+while (Program.IsEnabled)
+{
+  thermostatModules.Each((thermostat)=&gt;{
+    ThermostatLogicRun(thermostat);
+    return false;
+  });
+  Pause(120);
+}
+</ScriptSource>
+  <ScriptErrors>[]</ScriptErrors>
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1006</Address>
+  <Name>WiFi Thermostat</Name>
+  <Description>Module to read temperature and change set-points to a WiFi Thermostat having a web API.</Description>
+  <Group>Energy Management</Group>
+  <Features />
+  <ActivationTime xsi:nil="true" />
+  <TriggerTime xsi:nil="true" />
+  <Type>CSharp</Type>
+  <IsEnabled>false</IsEnabled>
+</ProgramBlock>

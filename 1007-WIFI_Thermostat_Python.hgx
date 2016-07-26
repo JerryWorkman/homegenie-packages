@@ -1,0 +1,227 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>hg.Program.AddOption("IPaddress", "192.168.1.100", "WiFi Thermostat IP Address", "text")
+hg.Program.AddOption("URI", "/tstat", "URI to get status data", "text")
+hg.Program.AddOption("debug", "true", "Enable or disable debug true|false", "text")
+hg.Program.AddOption("logfile", "/tmp/thermostat.log", "location of debug file", "text")
+hg.Program.Run()
+</ScriptCondition>
+  <ScriptSource>"""
+WIFI Thermostat
+TODO: use radiotherm module
+pip install radiotherm
+"""
+import sys
+sys.path.append("/usr/lib/python2.7/")
+sys.path.append("/usr/local/lib/python2.7/dist-packages/")
+import urllib
+import pprint
+pp = pprint.PrettyPrinter(indent=4)
+import logging
+import time
+#import radiotherm #not needed
+
+logfile = hg.Program.Option("logfile").Value
+debug = hg.Program.InputField("debug").Value
+IPaddress = hg.Program.Option("IPaddress").Value
+URI = hg.Program.Option("URI").Value
+
+if debug.lower() == "false":
+    debug = False
+
+if debug: 
+  logging.basicConfig(filename=logfile, level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s : %(message)s")
+  logging.info('==== WiFi Thermostat STARTUP ====')
+
+#Constants
+HOLDING_MODE_DIFF = 1
+MODULES_DOMAIN = "HomeAutomation.WiFiThermostat"
+EVENT_DESCRIPTION = "WiFi Thermostat"
+PARAMETER_TEMPERATURE_MODULE = "WiFiThermostat.TemperatureModule" 
+#PARAMETER_SWITCH_MODULE = "WiFiThermostat.SwitchModule"
+
+def F2C(f):
+  """Convert degrees F to C"""
+  try:
+    fd = float(f)
+    cd = (fd - 32.0) * 5.0 / 9.0
+    return str(round(cd, 2))  
+  except Exception, e:
+    if debug: logging.info('F2C Exception: %s' % (e))
+    return null
+
+def GetTstatData():
+  """ Get json data from WiFi thermostat
+    tstat contains (see http://lowpowerlab.com/downloads/RadioThermostat_CT50_Honeywell_Wifi_API_V1.3.pdf):
+    temp: 71.5 #Sensor temperature in thermostat units
+    tmode: 3 # thermotat mode
+    fmode: 1 # fan mode
+    override: 0
+    hold: 1 #thermostat in hold mode
+    t_heat: 72 #heat setpoint
+    t_cool: 77 #cool setpoint
+    ttarget: 1
+    program_mode: 1
+    tstate: 1
+    fstate: 1
+    time: day: 6 hour: 17 minute: 35 #thermostat time
+    t_type_post: 0 #HTTP post or get
+  """
+  try:
+    if debug: logging.info('Pinging Thermostat: %s' % IPaddress)
+    if hg.Net.Ping(IPaddress):
+      URL = 'http://{0}{1}'.format(IPaddress, URI)
+      if debug: logging.info('URL: %s' % URL)
+      json_data = hg.Net.WebService(URL).GetData()
+      if json_data: 
+          t = type(json_data)
+          if t is str:
+              if debug: logging.info('WiFi Thermostat GetTstatData returned string: %s' % json_data)
+          else:
+              return json_data
+      else: 
+        if debug: logging.info('WiFi Thermostat GetTstatData returned nothing')
+        return None
+    else:
+        hg.Program.Notify("WiFi Thermostat", "ERROR: Unable to ping IP address")
+        return None
+  except Exception, e:
+      if debug: logging.info('WiFi Thermostat GetTstatData error: %s' % (e))
+    
+def SetTstatData(param, vars): #e.g. vars = {'var1': 'some_data', 'var2': 1337}
+  URI = hg.Program.Option("URI")
+  params = urllib.urlencode(getVars)
+  URL = 'http://{0}{1}?{2}'.format(IPaddress, URI, params)
+  hg.Net.WebService(URL)
+  #f = urllib.urlopen(URL)
+  #print f.read()
+  
+tstatName = 'none'
+try:
+  hg.Program.AddVirtualModule(MODULES_DOMAIN, "WIFI-1", "Thermostat", "homegenie/generic/thermostat")
+  thermostat = hg.Modules.InDomain(MODULES_DOMAIN).WithAddress("WIFI-1").Get() 
+  if thermostat is None:
+    hg.Program.Notify("WiFi Thermostat", "ERROR: Unable to find WiFiThermostat module.")
+    hg.Pause(10)
+  else:
+    tstatName = str(thermostat.Instance.Domain) + ":" + str(thermostat.Instance.Address)
+    if debug: logging.info('Thermostat: %s' % tstatName)
+    hg.Program.Notify("Thermostat", tstatName)
+    hg.Pause(5)
+except Exception, e:
+  if debug: logging.info('WiFi Thermostat error: %s' % (e))
+  pass
+  
+holdingMode = []
+
+def ThermostatLogicRun(thermostat):
+  try:
+    if not thermostat:
+      hg.Program.Notify("WiFi Thermostat", "is not set")
+      hg.Pause(10)
+      return
+    #WRONG: need widget
+    temperature = thermostat.Parameter("Sensor.Temperature").Value
+    if debug: 
+      logging.info('thermostat module temperature: %s' % temperature)
+    #operatingState = thermostat.Parameter("Thermostat.OperatingState")
+    #thermostatMode = thermostat.Parameter("Thermostat.Mode")
+    #heatSetPoint = thermostat.Parameter("Thermostat.SetPoint.Heating")
+    domainAddress = ""
+    domain = ""
+    address = ""
+  except Exception, e:
+    if debug: logging.info('ThermostatLogicRun (thermostat) error: %s' % (e))
+    pass
+    
+  # Get Thermostat setpoint
+  # Update Thermostat module Temperature field
+  try:
+    tstat = GetTstatData()
+    if tstat == None:
+      if debug: logging.info('ThermostatLogicRun no tstat data')
+      return None
+
+    actualTempF = str(tstat["temp"])
+    if debug: logging.info('ThermostatLogicRun (actualTempF): %s' % actualTempF)
+    actualTempC = F2C(actualTempF) #temperatureModule.Parameter("Sensor.Temperature")
+    #set thermostat temp 
+    #TODO: verify that temp is within a reasonable range
+    if actualTempC:
+      if debug: logging.info('ThermostatLogicRun (actualTempC): %s' % actualTempC)
+      hg.Program.RaiseEvent(thermostat, "Sensor.Temperature", actualTempC, EVENT_DESCRIPTION)
+      
+    actualHeatSetPoint = str(tstat["t_heat"])
+    if actualHeatSetPoint:
+      if debug: logging.info('ThermostatLogicRun (actualHeatSetPoint): %s' % actualHeatSetPoint)
+      hg.Program.RaiseEvent(thermostat, "Thermostat.SetPoint.Heating", F2C(actualHeatSetPoint), EVENT_DESCRIPTION)
+    else:
+      if debug: logging.info('ThermostatLogicRun (actualHeatSetPoint is null')
+      pass
+
+    #"Thermostat.Mode"
+    tmode = tstat["tmode"]
+    t_mode = {0: 'Off', 1: 'Heat', 2: 'Cool', 3: 'Auto'} 
+    hg.Program.RaiseEvent(thermostat, "Thermostat.Mode", t_mode[tmode], EVENT_DESCRIPTION)
+    if debug: logging.info('ThermostatLogicRun (tmode): %s' % t_mode[tmode])
+
+    #"Thermostat.OperatingState"
+    tstate = tstat["tstate"] 
+    t_state = {0: 'Off', 1: 'Heat', 2: 'Cool'} 
+    hg.Program.RaiseEvent(thermostat, "Thermostat.OperatingState", t_state[tstate], EVENT_DESCRIPTION)
+    if debug: logging.info('ThermostatLogicRun (OperatingState): %s' % t_state[tstate])
+    
+    #"Thermostat.FanMode"
+    fstate = tstat["fmode"] 
+    f_state = {0: 'Auto', 2: 'Auto/Circulate', 3: 'Off'} 
+    hg.Program.RaiseEvent(thermostat, "Thermostat.FanMode", f_state[fstate], EVENT_DESCRIPTION)
+    if debug: logging.info('ThermostatLogicRun (FanMode): %s' % f_state[fstate])
+    
+    #TODO: update "real" thermostat setpoints from widget
+  except Exception, e:
+    if debug: logging.info('ThermostatLogicRun (get tstat data) exception: %s' % (e))
+    pass
+  return True
+
+def ParameterChangedCallback(parameter, thermostat):  
+  "If we are using external temperature sensors"
+  tstatName = str(thermostat.Instance.Domain) + ":" + str(thermostat.Instance.Address)
+  if debug: logging.info('ParameterChangedCallback Thermostat: %s' % tstatName)
+  if debug: logging.info('ParameterChangedCallback: %s' % parameter.Value)
+  if parameter == "Sensor.Temperature":
+      domainAddress = thermostat.Parameter(PARAMETER_TEMPERATURE_MODULE)
+      if domainAddress and ":" in domainAddress:
+        a = str.split(domainAddress, ':')
+        if len(a):
+          domain = a[0].lower()
+          address = a[1].lower()
+          if hg.module.Instance.Domain.lower() == domain and hg.module.Instance.Address.lower() == address:
+            hg.Program.RaiseEvent(thermostat, "Sensor.Temperature", parameter.Value, EVENT_DESCRIPTION)
+            ThermostatLogicRun(thermostat)
+      return False
+  return True
+
+#Looks for changes in sensor temperature
+hg.When.ModuleParameterChanged(ParameterChangedCallback)
+
+while thermostat:
+  ThermostatLogicRun(thermostat)
+  hg.Pause(120)
+
+hg.Program.GoBackground()
+</ScriptSource>
+  <ScriptErrors />
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1007</Address>
+  <Name>WIFI Thermostat Python</Name>
+  <Description>Use WIFI thermostat as a sensor and a switch to control setpoints and modes</Description>
+  <Group>Energy Management</Group>
+  <Features />
+  <ActivationTime>2016-03-07T01:17:49.371307Z</ActivationTime>
+  <TriggerTime>2016-03-07T01:17:51.369448Z</TriggerTime>
+  <Type>Python</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>

@@ -1,0 +1,222 @@
+<?xml version="1.0" encoding="utf-16"?>
+<ProgramBlock xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xmlns:xsd="http://www.w3.org/2001/XMLSchema">
+  <ConditionType>OnTrue</ConditionType>
+  <Conditions />
+  <Commands />
+  <ScriptCondition>  
+Program.Setup(()=&gt;
+{
+  // register 1 virtual modules using the "sensor" widget  
+  // TODO: move this to program code after detecting number of sensors
+  Program.AddVirtualModules("HomeGenie.Sensor", "Sensor", "homegenie/generic/sensor", 1, 1);         
+  Program.UseWidget("homegenie/generic/sensor");
+  
+  //Program.Parameter("Widget.DisplayIcon").Value = "pages/control/widgets/homegenie/generic/images/sensor.png";
+  Program.Parameter("Widget.DisplayIcon").Value = "pages/control/widgets/homegenie/generic/images/temperature.png";
+
+  //default port for *NIX systems glob.glob("/dev/serial/by-id/usb-RFXCOM*")
+  //serial_port = System.IO.GetFiles("/dev/serial/by-id/usb-RFXCOM*"); // doesn't work
+  
+  // set input fields parameters
+  Program.AddOption("port", "/dev/ttyUSB0", "Serial or USB device.", "text");
+  //Program.AddInputField("port", "/dev/serial/by-id/usb-RFXCOM_RFXrec433_04XOSET4-if00-port0", "Serial or USB device.");
+  Program.AddOption("units", "C", "Temperature units. Enter C or F", "text");
+  
+  // setup program parameters
+  Program.Parameter("Sensor.Temperature").Value = "";
+  Program.Parameter("Sensor.Humidity").Value = "";
+  Program.Parameter("Sensor.Battery").Value = "";
+  Program.Parameter("Sensor.Signal").Value = "";
+});
+
+return true;
+</ScriptCondition>
+  <ScriptSource>// RFXCOM and
+// Oregin Scientific Temp/Hg sensor
+// TODO: Make two different modules
+// TODO: handle multiple devices
+
+//Linux
+const string DEFAULT_PORT = "/dev/ttyUSB0"; 
+// find with
+// ls -l /dev/serial/by-id/
+
+//See http://rfxcom.readthedocs.org/en/latest/ref/protocol/__init__.html
+//RESET_PACKET = '\r\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+//STATUS_PACKET = '\r\x00\x00\x01\x02\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+//MODE_PACKET = '\r\x00\x00\x01\x03S\x00\x00\x0e/\x00\x00\x00\x00'
+//0D 00 00 00 02 00 00 00 00 00 00 00 00 00
+byte[] RFXCMD_RESET = 
+  { 0x0d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+//rfxcmd_status (0d00000002000000000000000000)
+byte[] RFXCMD_STATUS = 
+  { 0x0d, 0x00, 0x00, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+//  { 0x0d, 0x00, 0x00, 0x01, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00 };
+  
+//See: http://rfxcom.readthedocs.org/en/latest/ref/protocol/temphumidity.html
+//TODO: add packet types and subtypes and dispatch to driver
+/*
+var deviceDict = new Dictionary&lt;string, string&gt; {
+	// Type F9=TEMP_HUM, subtype 02 = TH1 - THGN122/123,/THGN132,THGR122/228/238/268
+    {"F902", "Temperature and humidity sensors"}, 
+    {"key2", "value2"}
+}; 
+*/
+
+string port = Program.Option("port").Value;
+if(port == "") port = DEFAULT_PORT;
+
+string units = Program.Option("units").Value.ToUpper();
+if (units.Contains("F")) {
+  units = "F";
+} else {
+  units = "C";
+}
+
+var CtoF = new Func&lt;double, double&gt;((C)=&gt;{
+  return (C * 1.8) + 32;
+});
+
+//TODO: Sensors are chatty, limit the frequency of reports
+var NotifyTemp = new Func&lt;double, string&gt;((ctemp)=&gt;{
+  double temp = ctemp;
+  if( units == "F") {
+    temp = CtoF(ctemp);
+  }
+  string sensorTemp = temp.ToString() + " " + units;
+  Program.Notify("Temp Sensor", sensorTemp);
+  //Program.Notify("Temp Sensor", WebApp.Utility.FormatTemperature(sensorTemp));
+  return sensorTemp;
+});
+
+var StringToBytes = new Func&lt;string, byte[]&gt;((str)=&gt;{
+    byte[] bytes = new byte[str.Length * sizeof(char)];
+    System.Buffer.BlockCopy(str.ToCharArray(), 0, bytes, 0, bytes.Length);
+    return bytes;
+});
+
+Action&lt;bool&gt;
+HandleStatusChanged = (bool connected) =&gt; {	
+  	// this will be called every time the connection status changes
+  	Program.Notify("RFXCOM Serial Status", connected ? "CONNECTED!" : "DISCONNECTED!");
+};
+
+
+Action&lt;string&gt; 
+HandleStringReceived = (string message) =&gt; {  
+  	// this will be called every time a string message is received from serial port
+  	//Usually should never happen
+	//Program.Notify("SerialPort String", message);
+    byte[] bytes = StringToBytes(message);
+    Program.Notify("SerialPort Bytes from string: ", BitConverter.ToString(bytes));  
+};
+
+Action&lt;byte[]&gt; 
+HandleMessageReceived = (byte[] bytes) =&gt; {
+  try {
+  	// this will be called every time a message is received from serial port
+    /*
+    Received                = 0A 52 01 00 F9 02 00 E2 19 02 79
+    Date/Time               = 2015-03-03 15:11:30
+    0 - Packet Length       = 0A // bytes[0]
+    1 - Packettype          = Temperature and humidity sensors // bytes[1]
+    2 - Subtype             = THGN122/123, THGN132, THGR122/228/238/268 // bytes[2]
+    3 - Seqnbr              = 00 // bytes[3]
+    4 &amp; 5 - Id              = F902 // bytes[4].toString() + bytes[5].toString()
+    6 - Temperature         = 22.6 C //  ((bytes[6] * 256) + bytes[7]) / 10
+    8 - Humidity            = 25% // bytes[8]
+    Humidity Status         = Normal //?
+    Battery                 = 9 // (bytes[10].ToString())[1]
+    Signal level            = 7 // (bytes[10].ToString())[0]
+    */
+    /*
+    ------------------------------------------------
+    Received                = 0A 52 01 00 F9 02 00 E2 19 02 79
+    Date/Time               = 2015-03-03 15:11:30
+    Packet Length           = 0A
+    Packettype              = Temperature and humidity sensors
+    Subtype                 = THGN122/123, THGN132, THGR122/228/238/268
+    Seqnbr                  = 00
+    Id                      = F902
+    Temperature             = 22.6 C
+    Humidity                = 25%
+    Humidity Status         = Normal
+    Battery                 = 9
+    Signal level            = 7      
+    */
+    //Another from https://code.google.com/p/rfxcmd/wiki/SensorPrintouts
+    /*
+    TH1:
+    0A520106580100D9360159
+    Packettype    = TEMP_HUM
+    subtype       = TH1 - THGN122/123,/THGN132,THGR122/228/238/268
+                    channel 1
+    Sequence nbr  = 6
+    ID            = 22529
+    Temperature   = 21.7 ??C
+    Humidity      = 54
+    Status        = Comfortable
+    Signal level  = 5
+    Battery       = OK
+    */
+    
+    int len = bytes[0]; // message length
+    string id = "";
+    if(len == 13) {  
+      //0D-01-00-00-02-52-4D-00-00-20-01-01-00-00
+      //Something else
+    } else if(len == 10) { 
+      //Get the module ID
+      id = bytes[4].ToString("X2") + bytes[5].ToString("X2");
+      if(id == "F902") {
+        //temp sensor on channel 2
+        //0A-52-01-02-F9-02-00-DE-1F-02-79
+        double ctemp = ((bytes[6] * 256) + bytes[7]) / 10.0;
+        double humid = bytes[8];
+        //Program.Notify("RFXCOM Sensor", bytes[10].ToString("X2")); 
+        NotifyTemp(ctemp);
+        Program.Parameter("Sensor.Temperature").Value = ctemp.ToString(); // widget expects C
+        Program.Parameter("Sensor.Humidity").Value = humid.ToString();
+        string signal = (bytes[10].ToString("X2"))[0].ToString();
+        Program.Parameter("Sensor.Signal").Value = signal;
+        string battery = (bytes[10].ToString("X2"))[1].ToString();
+        Program.Parameter("Sensor.Battery").Value = battery;
+      }
+    }
+	//Program.Notify("SerialPort Bytes", BitConverter.ToString(message));
+	//Program.Notify("SerialPort Bytes", len.ToString());
+  } catch(Exception ex) {
+    Console.WriteLine(ex.Message + " " + ex.StackTrace);
+  }  
+};
+
+// open the serial port channel and register handlers
+SerialPort
+  	.WithName( port )
+  	.OnStatusChanged( HandleStatusChanged )
+  	.OnMessageReceived( HandleMessageReceived )
+  	.OnStringReceived( HandleStringReceived )
+  	.Connect( 38400 ); // increase baud rate if you get short reads, reduce it if you get nothing
+
+SerialPort.SendMessage(RFXCMD_RESET);
+Pause(1); // let it settle
+
+while (Program.IsEnabled)
+{
+  // send a RFXCMD_STATUS message through serial port every 30 seconds
+  SerialPort.SendMessage(RFXCMD_STATUS);
+  Pause(30);
+}
+</ScriptSource>
+  <ScriptErrors>[]</ScriptErrors>
+  <Domain>HomeAutomation.HomeGenie.Automation</Domain>
+  <Address>1008</Address>
+  <Name>RFXCOM Sensors</Name>
+  <Description>Reads RFXCOM Oregon Scientific Temp and Humidity Sensors </Description>
+  <Group>RFXCOM</Group>
+  <Features />
+  <ActivationTime xsi:nil="true" />
+  <TriggerTime>2016-03-07T01:17:50.473143Z</TriggerTime>
+  <Type>CSharp</Type>
+  <IsEnabled>true</IsEnabled>
+</ProgramBlock>
